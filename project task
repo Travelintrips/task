@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Project Tracker</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #16181d;
+      --text: #e6e9ef;
+      --muted: #8b949e;
+      --primary: #7c3aed;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --border: #2d3139;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 2rem; }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1, h2 { margin-bottom: 1rem; }
+    input, select, button {
+      background: var(--card); border: 1px solid var(--border); color: var(--text);
+      padding: 0.6rem 0.8rem; border-radius: var(--radius); width: 100%;
+    }
+    button { cursor: pointer; background: var(--primary); border: none; color: white; font-weight: 500; }
+    button:hover { opacity: 0.9; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .progress-container { background: var(--border); border-radius: 999px; height: 12px; margin: 1.5rem 0; overflow: hidden; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg, var(--primary), var(--success)); width: 0%; transition: width 0.3s ease; }
+    .progress-text { display: flex; justify-content: space-between; color: var(--muted); margin-bottom: 0.5rem; font-size: 0.9rem; }
+    .task-list { display: flex; flex-direction: column; gap: 0.8rem; }
+    .task-card {
+      background: var(--card); border: 1px solid var(--border); padding: 1rem;
+      border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center;
+    }
+    .task-info { flex: 1; }
+    .task-title { font-weight: 500; margin-bottom: 0.3rem; }
+    .task-meta { color: var(--muted); font-size: 0.85rem; display: flex; gap: 0.8rem; align-items: center; }
+    .badge {
+      padding: 0.2rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600;
+    }
+    .badge.todo { background: #1f2937; color: #9ca3af; }
+    .badge.progress { background: #374151; color: #fbbf24; }
+    .badge.done { background: #064e3b; color: #34d399; }
+    .actions { display: flex; gap: 0.5rem; }
+    .actions button { padding: 0.4rem 0.6rem; font-size: 0.8rem; width: auto; }
+    .setup-box { background: var(--card); padding: 1.5rem; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 2rem; }
+    .hidden { display: none; }
+    .error { color: #ef4444; margin-top: 0.5rem; font-size: 0.85rem; }
+    .loading { color: var(--muted); text-align: center; padding: 2rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🚀 GitHub Project Tracker</h1>
+    
+    <!-- Setup Section -->
+    <div id="setup" class="setup-box">
+      <h2>⚙️ Konfigurasi GitHub</h2>
+      <div class="form-grid">
+        <input type="text" id="owner" placeholder="Username GitHub (contoh: john-doe)">
+        <input type="text" id="repo" placeholder="Nama Repo (contoh: my-project)">
+      </div>
+      <input type="password" id="pat" placeholder="Personal Access Token (scope: repo)" style="margin-bottom: 1rem;">
+      <button id="connectBtn">Hubungkan & Muat Data</button>
+      <p id="setupError" class="error hidden"></p>
+      <p style="color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem;">
+        🔑 Buat PAT di: <code>Settings → Developer settings → Personal access tokens → Classic</code><br>
+        Centang scope: <code>repo</code>. Jangan share token ini.
+      </p>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard" class="hidden">
+      <div class="progress-text">
+        <span id="progressLabel">Progres Proyek</span>
+        <span id="progressPercent">0%</span>
+      </div>
+      <div class="progress-container">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+
+      <form id="addForm" class="form-grid">
+        <input type="text" id="taskTitle" placeholder="Nama Tugas..." required>
+        <select id="taskStatus">
+          <option value="todo">To Do</option>
+          <option value="progress">In Progress</option>
+          <option value="done">Done</option>
+        </select>
+      </form>
+      <button id="addBtn" style="margin-bottom: 1.5rem; width: 100%;">+ Tambah Tugas</button>
+
+      <div id="taskList" class="task-list">
+        <p class="loading">Memuat tugas...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'https://api.github.com/repos';
+    let config = {};
+
+    // Load saved config
+    const saved = localStorage.getItem('gh_tracker_config');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        document.getElementById('owner').value = parsed.owner || '';
+        document.getElementById('repo').value = parsed.repo || '';
+        document.getElementById('pat').value = parsed.pat || '';
+      } catch (e) { localStorage.removeItem('gh_tracker_config'); }
+    }
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+      const owner = document.getElementById('owner').value.trim();
+      const repo = document.getElementById('repo').value.trim();
+      const pat = document.getElementById('pat').value.trim();
+      const err = document.getElementById('setupError');
+
+      if (!owner || !repo || !pat) {
+        err.textContent = 'Semua field wajib diisi.';
+        err.classList.remove('hidden');
+        return;
+      }
+
+      config = { owner, repo, pat };
+      localStorage.setItem('gh_tracker_config', JSON.stringify(config));
+      
+      err.classList.add('hidden');
+      await loadTasks();
+      document.getElementById('setup').classList.add('hidden');
+      document.getElementById('dashboard').classList.remove('hidden');
+    });
+
+    async function githubFetch(path, method = 'GET', body = null) {
+      const res = await fetch(`${API}/${config.owner}/${config.repo}${path}`, {
+        method,
+        headers: {
+          'Authorization': `token ${config.pat}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: body ? JSON.stringify(body) : null
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+
+    async function loadTasks() {
+      const list = document.getElementById('taskList');
+      list.innerHTML = '<p class="loading">Memuat tugas...</p>';
+      try {
+        // Filter hanya Issues (bukan PR)
+        const issues = await githubFetch('/issues?state=all&per_page=100');
+        const tasks = issues.filter(i => !i.pull_request);
+        renderTasks(tasks);
+        updateProgress(tasks);
+      } catch (e) {
+        list.innerHTML = `<p class="error">Gagal memuat: ${e.message}</p>`;
+      }
+    }
+
+    function renderTasks(tasks) {
+      const list = document.getElementById('taskList');
+      if (!tasks.length) {
+        list.innerHTML = '<p class="loading">Belum ada tugas. Tambahkan di atas.</p>';
+        return;
+      }
+
+      list.innerHTML = tasks.map(t => {
+        const status = getLabelStatus(t);
+        const badgeClass = status === 'todo' ? 'todo' : status === 'progress' ? 'progress' : 'done';
+        const statusText = status === 'todo' ? 'To Do' : status === 'progress' ? 'In Progress' : 'Done';
+        const btnText = status === 'done' ? '🔄 Buka Kembali' : '✅ Selesai';
+        const nextStatus = status === 'done' ? 'todo' : 'done';
+
+        return `
+          <div class="task-card">
+            <div class="task-info">
+              <div class="task-title">${t.title}</div>
+              <div class="task-meta">
+                <span class="badge ${badgeClass}">${statusText}</span>
+                <span>📅 ${new Date(t.created_at).toLocaleDateString('id-ID')}</span>
+                <span>🔗 <a href="${t.html_url}" target="_blank" style="color:var(--muted)">GitHub</a></span>
+              </div>
+            </div>
+            <div class="actions">
+              <button onclick="updateStatus(${t.number}, '${nextStatus}')">${btnText}</button>
+              <button onclick="window.open('${t.html_url}')" style="background:#2d3139">💬</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function getLabelStatus(issue) {
+      // Cek label manual atau fallback ke state
+      const hasLabel = (name) => issue.labels.some(l => l.name.toLowerCase() === name);
+      if (hasLabel('done') || issue.state === 'closed') return 'done';
+      if (hasLabel('progress') || hasLabel('in progress')) return 'progress';
+      return 'todo';
+    }
+
+    function updateProgress(tasks) {
+      const total = tasks.length;
+      const closed = tasks.filter(t => t.state === 'closed' || getLabelStatus(t) === 'done').length;
+      const percent = total > 0 ? Math.round((closed / total) * 100) : 0;
+      document.getElementById('progressBar').style.width = `${percent}%`;
+      document.getElementById('progressPercent').textContent = `${percent}%`;
+      document.getElementById('progressLabel').textContent = `${closed} / ${total} tugas selesai`;
+    }
+
+    document.getElementById('addBtn').addEventListener('click', async () => {
+      const title = document.getElementById('taskTitle').value.trim();
+      const status = document.getElementById('taskStatus').value;
+      if (!title) return;
+
+      const labels = status === 'progress' ? ['In Progress'] : status === 'done' ? ['Done'] : ['To Do'];
+      try {
+        await githubFetch('/issues', 'POST', { title, labels });
+        document.getElementById('taskTitle').value = '';
+        await loadTasks();
+      } catch (e) {
+        alert(`Gagal menambah tugas: ${e.message}`);
+      }
+    });
+
+    window.updateStatus = async (number, nextStatus) => {
+      const labels = nextStatus === 'done' ? ['Done'] : ['To Do'];
+      const state = nextStatus === 'done' ? 'closed' : 'open';
+      try {
+        await githubFetch(`/issues/${number}`, 'PATCH', { state, labels });
+        await loadTasks();
+      } catch (e) {
+        alert(`Gagal memperbarui status: ${e.message}`);
+      }
+    };
+  </script>
+</body>
+</html>
